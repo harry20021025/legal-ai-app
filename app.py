@@ -28,14 +28,14 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 def load_models():
 
     # ---- BERT CLASSIFIER ----
-    tokenizer_cls = AutoTokenizer.from_pretrained(CLASSIFIER_PATH)
-    model_cls = BertForSequenceClassification.from_pretrained(CLASSIFIER_PATH)
+    tokenizer_cls = AutoTokenizer.from_pretrained("bert-base-uncased")
+    model_cls = BertForSequenceClassification.from_pretrained("bert-base-uncased")
     model_cls.to(device)
     model_cls.eval()
 
     # ---- T5 SUMMARIZER ----
     tokenizer_sum = AutoTokenizer.from_pretrained("google/flan-t5-small")
-    model_sum = AutoModelForSeq2SeqLM.from_pretrained(SUMMARIZER_PATH)
+    model_sum = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-small")
     model_sum.to(device)
     model_sum.eval()
 
