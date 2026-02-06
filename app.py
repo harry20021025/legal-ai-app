@@ -95,36 +95,32 @@ def clean_summary(text):
 
 def summarize_text(text, tokenizer, model):
 
-    prompt = f"""
-Summarize the legal case clearly in simple everyday language.
-
-Give bullet points with:
-
-• Background of case  
-• Main legal issue  
-• Court reasoning  
-• Final decision  
-
-Text:
-{text[:3500]}
-"""
+    prompt = (
+        "Summarize the following legal case in simple everyday language as if explaining to a normal person. Avoid legal jargon. Explain facts, issue, and decision clearly: "
+        "Include background, legal issue, arguments, and final court decision in detail:\n\n"
+        + text[:3500]   # increased input length
+    )
 
     inputs = tokenizer(
         prompt,
         return_tensors="pt",
         truncation=True,
-        max_length=768
+        max_length=768   # increased token space
     ).to(device)
 
     with torch.no_grad():
         outputs = model.generate(
             inputs["input_ids"],
-            max_length=550,
-            min_length=350,
+
+            max_length=500,        # 🔼 longer summary
+            min_length=300,        # 🔼 avoid tiny summaries
+
             num_beams=6,
-            repetition_penalty=2.3,
+            repetition_penalty=2.5,
+            length_penalty=1.0,
             no_repeat_ngram_size=4,
-            temperature=0.7,
+
+            temperature=0.7,       # makes language smoother
             early_stopping=True
         )
 
@@ -139,13 +135,13 @@ Text:
 
 st.set_page_config(page_title="Legal AI System", layout="centered")
 
-st.title("⚖️ Legal AI Document Analyzer")
+st.title("⚖️ Legal Document AI System")
 
 st.write("""
 Upload a court judgment PDF and get:
 
-📂 Case category  
-📄 Simple bullet-style summary  
+• 📂 Case category  
+• 📄 Simple human-readable summary  
 """)
 
 uploaded_file = st.file_uploader("Upload PDF", type=["pdf"])
@@ -155,11 +151,11 @@ if uploaded_file:
     with st.spinner("Loading AI models..."):
         tokenizer_cls, model_cls, tokenizer_sum, model_sum = load_models()
 
-    with st.spinner("Extracting PDF text..."):
+    with st.spinner("Extracting text from PDF..."):
         text = extract_text_from_pdf(uploaded_file)
 
     if len(text) < 200:
-        st.error("Not enough text found in PDF.")
+        st.error("Not enough text extracted from PDF.")
     else:
 
         with st.spinner("Analyzing document..."):
@@ -176,13 +172,13 @@ if uploaded_file:
                 model_sum
             )
 
-        st.success("Analysis complete!")
+        st.success("✅ Analysis complete")
 
         st.subheader("📂 Predicted Case Type")
         st.write(category)
 
         st.subheader("📄 Simplified Summary")
-        st.markdown(summary)
+        st.write(summary)
 
 st.markdown("---")
-st.caption("Built by Hariom Dixit | Legal AI System")
+st.caption("Built by Hariom Dixit | Legal NLP AI System")
