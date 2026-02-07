@@ -94,53 +94,51 @@ def clean_summary(text):
 # BULLET STYLE SUMMARY
 # ==============================
 
+def remove_front_matter(text):
+    keywords = ["JUDGMENT", "Judgment", "REASONS", "Reasons"]
+    for k in keywords:
+        idx = text.find(k)
+        if idx != -1:
+            return text[idx:]
+    return text
+
+
 def summarize_text(text, tokenizer, model):
 
-    prompt = f"""
-You are a legal assistant.
+    text = remove_front_matter(text)
 
-Summarize the following court judgment in SIMPLE language.
-Do NOT copy text.
-Do NOT repeat words.
-Use BULLET POINTS only.
-
-Format exactly like this:
-
-• Background:
-• Main Legal Issue:
-• Key Arguments:
-• Court’s Final Decision:
-
-Judgment text:
-{text[:3500]}
-"""
+    prompt = (
+        "Summarize the following court judgment in bullet points.\n"
+        "Use simple language.\n"
+        "Mandatory format:\n"
+        "- Background\n"
+        "- Legal Issue\n"
+        "- Court Reasoning\n"
+        "- Final Decision\n\n"
+        "Judgment text:\n"
+        + text[:4000]
+    )
 
     inputs = tokenizer(
         prompt,
         return_tensors="pt",
         truncation=True,
-        max_length=768
+        max_length=1024
     ).to(device)
 
     with torch.no_grad():
         outputs = model.generate(
             inputs["input_ids"],
-
-            max_length=450,
+            max_length=420,
             min_length=220,
-
             num_beams=8,
-            no_repeat_ngram_size=4,
             repetition_penalty=2.8,
-
-            top_p=0.9,
-            do_sample=False,
-
+            no_repeat_ngram_size=4,
             early_stopping=True
         )
 
-    summary = tokenizer.decode(outputs[0], skip_special_tokens=True)
-    return clean_summary(summary)
+    return clean_summary(tokenizer.decode(outputs[0], skip_special_tokens=True))
+
 
 
 
