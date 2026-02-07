@@ -47,6 +47,47 @@ def extract_text_from_pdf(file):
             if page.extract_text():
                 text += page.extract_text() + " "
     return text.strip()
+    
+
+def chunk_text(text, max_words=900):
+    """
+    Split long text into word-based chunks
+    """
+    words = text.split()
+    chunks = []
+
+    for i in range(0, len(words), max_words):
+        chunk = " ".join(words[i:i + max_words])
+        chunks.append(chunk)
+
+    return chunks
+
+def summarize_chunk(chunk, tokenizer, model):
+    prompt = (
+        "Summarize this part of a legal judgment clearly. "
+        "Focus on facts, legal issue, reasoning, and outcome:\n\n"
+        + chunk
+    )
+
+    inputs = tokenizer(
+        prompt,
+        return_tensors="pt",
+        truncation=True,
+        max_length=768
+    ).to(device)
+
+    with torch.no_grad():
+        output = model.generate(
+            inputs["input_ids"],
+            max_length=220,
+            min_length=120,
+            num_beams=5,
+            repetition_penalty=2.2,
+            no_repeat_ngram_size=3,
+            early_stopping=True
+        )
+
+    return tokenizer.decode(output[0], skip_special_tokens=True)
 
 
 # ==============================
@@ -105,39 +146,55 @@ def remove_front_matter(text):
 
 def summarize_text(text, tokenizer, model):
 
-    text = remove_front_matter(text)
+    # 1️⃣ Split into chunks
+    chunks = chunk_text(text)
 
-    prompt = (
-        "Summarize the following court judgment in bullet points.\n"
-        "Use simple language.\n"
-        "Mandatory format:\n"
-        "- Background\n"
-        "- Legal Issue\n"
-        "- Court Reasoning\n"
-        "- Final Decision\n\n"
-        "Judgment text:\n"
-        + text[:4000]
+    chunk_summaries = []
+
+    # 2️⃣ Summarize each chunk
+    for i, chunk in enumerate(chunks):
+        summary = summarize_chunk(chunk, tokenizer, model)
+        chunk_summaries.append(summary)
+
+    combined_summary = " ".join(chunk_summaries)
+
+    # 3️⃣ Final refinement pass (MOST IMPORTANT)
+    final_prompt = (
+        "Using the following summaries of a legal judgment, "
+        "write a clear, simple, human-friendly summary in bullet points.\n\n"
+        "Include:\n"
+        "- Background facts\n"
+        "- Main legal issue\n"
+        "- Court reasoning\n"
+        "- Final court decision (very clear)\n\n"
+        + combined_summary
     )
 
     inputs = tokenizer(
-        prompt,
+        final_prompt,
         return_tensors="pt",
         truncation=True,
-        max_length=1024
+        max_length=768
     ).to(device)
 
     with torch.no_grad():
-        outputs = model.generate(
+        final_output = model.generate(
             inputs["input_ids"],
             max_length=420,
-            min_length=220,
-            num_beams=8,
-            repetition_penalty=2.8,
+            min_length=250,
+            num_beams=6,
+            repetition_penalty=2.5,
             no_repeat_ngram_size=4,
             early_stopping=True
         )
 
-    return clean_summary(tokenizer.decode(outputs[0], skip_special_tokens=True))
+    final_summary = tokenizer.decode(
+        final_output[0],
+        skip_special_tokens=True
+    )
+
+    return clean_summary(final_summary)
+
 
 
 
