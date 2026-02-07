@@ -1,6 +1,7 @@
 import streamlit as st
 import torch
 import pdfplumber
+import re
 
 from transformers import (
     AutoTokenizer,
@@ -15,7 +16,6 @@ from transformers import (
 CLASSIFIER_PATH = "hari102002/legal-bert-classifier"
 SUMMARIZER_PATH = "hari102002/legal-t5-summarizer"
 
-
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # ==============================
@@ -24,7 +24,6 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 @st.cache_resource
 def load_models():
-
     tokenizer_cls = AutoTokenizer.from_pretrained(CLASSIFIER_PATH)
     model_cls = BertForSequenceClassification.from_pretrained(CLASSIFIER_PATH)
     model_cls.to(device).eval()
@@ -35,7 +34,6 @@ def load_models():
 
     return tokenizer_cls, model_cls, tokenizer_sum, model_sum
 
-
 # ==============================
 # PDF TEXT EXTRACTION
 # ==============================
@@ -44,28 +42,53 @@ def extract_text_from_pdf(file):
     text = ""
     with pdfplumber.open(file) as pdf:
         for page in pdf.pages:
-            if page.extract_text():
-                text += page.extract_text() + " "
+            page_text = page.extract_text()
+            if page_text:
+                text += page_text + " "
     return text.strip()
-    
 
-def chunk_text(text, max_words=900):
-    """
-    Split long text into word-based chunks
-    """
+# ==============================
+# LEGAL TEXT PREPROCESSING
+# ==============================
+
+def preprocess_legal_text(text):
+    # Remove page numbers, exhibits, noisy brackets
+    text = re.sub(r"\b\d+\s+of\s+\d+\b", "", text)
+    text = re.sub(r"\(\(.*?\)\)", "", text)
+    text = re.sub(r"Exh\.\s*\d+", "", text)
+    text = re.sub(r"\s+", " ", text)
+
+    # Remove citations clutter
+    text = re.sub(r"\(\d{4}\).*?\)", "", text)
+
+    return text.strip()
+
+def remove_front_matter(text):
+    for key in ["JUDGMENT", "Judgment", "REASONS", "Reasons"]:
+        idx = text.find(key)
+        if idx != -1:
+            return text[idx:]
+    return text
+
+# ==============================
+# TEXT CHUNKING
+# ==============================
+
+def chunk_text(text, max_words=700):
     words = text.split()
-    chunks = []
+    return [
+        " ".join(words[i:i + max_words])
+        for i in range(0, len(words), max_words)
+    ]
 
-    for i in range(0, len(words), max_words):
-        chunk = " ".join(words[i:i + max_words])
-        chunks.append(chunk)
-
-    return chunks
+# ==============================
+# CHUNK SUMMARIZATION
+# ==============================
 
 def summarize_chunk(chunk, tokenizer, model):
     prompt = (
-        "Summarize this part of a legal judgment clearly. "
-        "Focus on facts, legal issue, reasoning, and outcome:\n\n"
+        "Summarize this portion of a legal judgment clearly.\n"
+        "Focus only on facts, legal issue, reasoning, and outcome.\n\n"
         + chunk
     )
 
@@ -79,8 +102,8 @@ def summarize_chunk(chunk, tokenizer, model):
     with torch.no_grad():
         output = model.generate(
             inputs["input_ids"],
-            max_length=220,
-            min_length=120,
+            max_length=200,
+            min_length=110,
             num_beams=5,
             repetition_penalty=2.2,
             no_repeat_ngram_size=3,
@@ -89,84 +112,48 @@ def summarize_chunk(chunk, tokenizer, model):
 
     return tokenizer.decode(output[0], skip_special_tokens=True)
 
-
 # ==============================
-# CASE CLASSIFICATION
-# ==============================
-
-LABELS = ["Civil", "Constitutional", "Criminal", "Service", "Tax", "Other"]
-
-def predict_category(text, tokenizer, model):
-
-    inputs = tokenizer(
-        text,
-        return_tensors="pt",
-        truncation=True,
-        padding=True,
-        max_length=512
-    ).to(device)
-
-    with torch.no_grad():
-        outputs = model(**inputs)
-
-    pred_id = outputs.logits.argmax().item()
-
-    if pred_id < len(LABELS):
-        return LABELS[pred_id]
-
-    return "Other"
-
-
-# ==============================
-# CLEAN SUMMARY
+# FINAL SUMMARY CLEANUP
 # ==============================
 
 def clean_summary(text):
-
     junk = ["Indian Kanoon", "http://", "www.", "AIR", "SCC"]
-
     for j in junk:
         text = text.replace(j, "")
-
     return text.strip()
 
-
 # ==============================
-# BULLET STYLE SUMMARY
+# FULL CHUNKED SUMMARIZATION
 # ==============================
-
-def remove_front_matter(text):
-    keywords = ["JUDGMENT", "Judgment", "REASONS", "Reasons"]
-    for k in keywords:
-        idx = text.find(k)
-        if idx != -1:
-            return text[idx:]
-    return text
-
 
 def summarize_text(text, tokenizer, model):
 
-    # 1️⃣ Split into chunks
-    chunks = chunk_text(text)
+    # 🔹 Preprocess text
+    text = preprocess_legal_text(text)
+    text = remove_front_matter(text)
 
+    # 🔹 Chunking
+    chunks = chunk_text(text)
     chunk_summaries = []
 
-    # 2️⃣ Summarize each chunk
-    for i, chunk in enumerate(chunks):
-        summary = summarize_chunk(chunk, tokenizer, model)
-        chunk_summaries.append(summary)
+    for chunk in chunks:
+        chunk_summaries.append(
+            summarize_chunk(chunk, tokenizer, model)
+        )
 
     combined_summary = " ".join(chunk_summaries)
 
-    # 3️⃣ Final refinement pass (MOST IMPORTANT)
+    # 🔹 Final refinement (MOST IMPORTANT)
     final_prompt = (
-        "Using the following summaries of a legal judgment, "
-        "write a clear, simple, human-friendly summary in bullet points.\n\n"
-        "Include:\n"
-        "- Background facts\n"
-        "- Main legal issue\n"
-        "- Court reasoning\n"
-        "- Final court decision (very clear)\n\n"
+        "You are a legal assistant.\n\n"
+        "Using the summaries below, write a clean bullet-point summary "
+        "for a common person.\n\n"
+        "Use EXACTLY this structure:\n"
+        "• Background\n"
+        "• Main Legal Issue\n"
+        "• Court’s Reasoning\n"
+        "• Final Court Decision\n\n"
+        "Do NOT include party addresses, exhibit numbers, citations, or procedural clutter.\n\n"
         + combined_summary
     )
 
@@ -180,10 +167,10 @@ def summarize_text(text, tokenizer, model):
     with torch.no_grad():
         final_output = model.generate(
             inputs["input_ids"],
-            max_length=420,
-            min_length=250,
+            max_length=450,
+            min_length=260,
             num_beams=6,
-            repetition_penalty=2.5,
+            repetition_penalty=2.6,
             no_repeat_ngram_size=4,
             early_stopping=True
         )
@@ -195,9 +182,27 @@ def summarize_text(text, tokenizer, model):
 
     return clean_summary(final_summary)
 
+# ==============================
+# CASE CLASSIFICATION
+# ==============================
 
+LABELS = ["Civil", "Constitutional", "Criminal", "Service", "Tax", "Other"]
 
+def predict_category(text, tokenizer, model):
+    text = preprocess_legal_text(text)
 
+    inputs = tokenizer(
+        text,
+        return_tensors="pt",
+        truncation=True,
+        padding=True,
+        max_length=512
+    ).to(device)
+
+    with torch.no_grad():
+        outputs = model(**inputs)
+
+    return LABELS[outputs.logits.argmax().item()]
 
 # ==============================
 # STREAMLIT UI
@@ -217,27 +222,24 @@ Upload a court judgment PDF and get:
 uploaded_file = st.file_uploader("Upload PDF", type=["pdf"])
 
 if uploaded_file:
-
     with st.spinner("Loading AI models..."):
         tokenizer_cls, model_cls, tokenizer_sum, model_sum = load_models()
 
     with st.spinner("Extracting text from PDF..."):
-        text = extract_text_from_pdf(uploaded_file)
+        raw_text = extract_text_from_pdf(uploaded_file)
 
-    if len(text) < 200:
+    if len(raw_text) < 200:
         st.error("Not enough text extracted from PDF.")
     else:
-
         with st.spinner("Analyzing document..."):
-
             category = predict_category(
-                text,
+                raw_text,
                 tokenizer_cls,
                 model_cls
             )
 
             summary = summarize_text(
-                text,
+                raw_text,
                 tokenizer_sum,
                 model_sum
             )
