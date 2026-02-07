@@ -13,7 +13,8 @@ from transformers import (
 # ==============================
 
 CLASSIFIER_PATH = "hari102002/legal-bert-classifier"
-SUMMARIZER_PATH = "hari102002/legal-t5-summarizer"
+SUMMARIZER_PATH = "google/flan-t5-large"
+
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
